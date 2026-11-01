@@ -1,6 +1,19 @@
 # zcode-mcp
 
-把 [zcode](https://zcode.z.ai) coding agent 封装成 MCP 工具,供外部 agent(Codex、Claude Code、Cursor……)调用:**调用方负责思考和拆解任务,zcode 负责实际写代码**。省 token、省订阅——贵模型只出思路,活儿交给本地 zcode/GLM 干。
+<div align="center">
+
+**让 GPT 负责思考,让 zcode 负责写码。**
+Delegate coding to zcode from any MCP client — Codex, Claude Code, Cursor...
+
+[![version](https://img.shields.io/badge/version-0.2.0-blue)]()
+[![zcode](https://img.shields.io/badge/zcode-0.16.9%20%7C%200.17.1%20tested-green)]()
+[![node](https://img.shields.io/badge/node-%E2%89%A518%20(server)%20%E2%89%A524%20(zcode%200.17%2B)-yellow)]()
+[![platform](https://img.shields.io/badge/platform-macOS-lightgrey)]()
+[![license](https://img.shields.io/badge/license-MIT-black)]()
+
+</div>
+
+把本机 [ZCode](https://zcode.z.ai) 桌面版的 agent 能力(GLM-5.3、文件读写、shell、git、自验证)封装成 **MCP 工具**,供其他 coding agent 调用。贵模型只出思路,活儿交给本地 zcode——**省 token、省订阅**。
 
 ```
 ┌────────────┐   MCP (stdio)   ┌──────────────────┐  ZCode Protocol (stdio)  ┌─────────────────────┐
@@ -9,36 +22,85 @@
 └────────────┘                 └──────────────────┘                          └─────────────────────┘
 ```
 
-zcode 自身没有 `mcp serve` 服务端模式,CLI 的 `-p` 无头模式又要求先选模型而无法在命令行指定。本工具通过逆向 ZCode 桌面版驱动 agent 的内部协议(`zcode app-server`),完整解决了这些问题:指定模型、多轮会话、事件流、任务取消全部可用。
+zcode 没有官方 `mcp serve`,CLI `-p` 无头模式又无法指定模型;本项目逆向了 ZCode 桌面版驱动 agent 的内部协议(`zcode app-server`),补齐了模型选择、多轮会话、事件流与凭据注入。
 
-## 提供的 MCP 工具
+## 📋 目录
 
-| 工具 | 说明 |
-|---|---|
-| `zcode_run` | 委派一个开发任务给 zcode。参数:`prompt`(必填)、`cwd`(项目目录)、`mode`(plan/build/edit/yolo/guarded,默认 yolo)、`model`(默认 GLM-5.3)、`reasoning_level`(low/high/max)、`session_id`(续接上一轮)、`timeout_ms`(默认 10 分钟,上限 1 小时)。返回 zcode 的最终答复 + `session_id` + 工具使用/token/耗时统计 |
-| `zcode_check` | 检查后端可用性:二进制路径、凭据、可用模型列表 |
-| `zcode_sessions` | 列出某工作区的最近会话(可作为 `session_id` 续接) |
+- [亮点](#-亮点)
+- [工具一览](#-工具一览)
+- [快速开始](#-快速开始)
+- [接入配置](#-接入配置)
+- [使用示例](#-使用示例)
+- [配置参考](#-配置参考)
+- [工作原理](#-工作原理)
+- [排障](#-排障)
+- [同类项目对比](#-同类项目对比)
+- [FAQ](#-faq)
+- [安全须知](#-安全须知)
+- [开发](#-开发)
 
-## 前置条件
+## ✨ 亮点
 
-1. **ZCode 桌面版**(macOS)已安装,且**登录过一次**——登录凭据存放在 `~/.zcode/v2/credentials.json`,zcode-mcp 复用它们,无需再次登录。
-2. Node.js ≥ 18(运行本 server)。
-3. **zcode 0.17+ 额外要求 Node ≥ 24 来运行 app-server 子进程**(其 `node:sqlite` 迁移依赖 `isTransaction` 属性,旧 Node 会以 `sql_failed` 崩溃)。zcode-mcp 会自动选择运行时,优先级:
-   - `ZCODE_NODE_BIN` 指定的可执行文件;
-   - `~/.zcode-mcp/runtime/node-v24*/bin/node`(便携版,用官方 tarball 解压即得,不影响系统);
-   - 系统 Node(仅当 ≥ 24)。
-4. 构建本工具:
-   ```bash
-   git clone https://github.com/TechYan/zcode_mcp.git
-   cd zcode_mcp
-   npm install && npm run build
-   ```
+- **真·agent 委派**——不是单轮问答:zcode 在目标目录里自主读改文件、跑命令、跑 git、自验证,返回最终答复 + 会话 id
+- **多轮会话**——`session_id` 续接上一轮,上下文不丢,追问不用重复铺陈
+- **零额外登录**——直接复用 ZCode 桌面版凭据(`~/.zcode/v2/credentials.json`,AES-GCM 加密,运行时解密注入)
+- **环境自动适配**——自动导出 macOS 系统根证书解决 api.z.ai 新证书链、自动透传系统代理、自动为 zcode 0.17+ 选用 Node ≥ 24 运行时(便携版,不动系统)
+- **Skill 一键部署**——附带 zcode skill(部署/使用/排障指南 + 幂等 setup 脚本)
+- **输入边界校验**——所有 MCP 参数(session_id/cwd/mode/reasoning)在进入协议层前经白名单校验
 
-## 接入配置
+## 🛠️ 工具一览
 
-### Codex
+| 工具 | 签名 | 说明 |
+|---|---|---|
+| `zcode_run` | `(prompt!, cwd, mode, model, reasoning_level, session_id, timeout_ms)` | 委派任务;返回最终答复 + `session_id` + 工具使用/token/耗时统计 |
+| `zcode_check` | `()` | 健康检查:二进制路径、凭据、可用模型;排障第一步 |
+| `zcode_sessions` | `(cwd?)` | 列出可续接的历史会话 |
 
-`~/.codex/config.toml`(`<repo>` 替换为你克隆的绝对路径):
+`zcode_run` 参数速查:
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `prompt` | 必填 | 任务指令,要具体:改什么、在哪、如何验证 |
+| `cwd` | server cwd | 目标项目**绝对路径**(文件操作的必备项) |
+| `mode` | `yolo` | `plan`(只读分析)/ `build` / `edit` / `yolo`(全自动)/ `guarded`(0.17+ 策略门控) |
+| `model` | `GLM-5.3` | 可选 `GLM-5.3-Flash`(机械改动省额度) |
+| `reasoning_level` | `max` | `low` / `high` / `max` |
+| `session_id` | – | 续接上一轮(来自上次返回值) |
+| `timeout_ms` | 600000 | 上限 3600000(1 小时) |
+
+## 🚀 快速开始
+
+**前置:ZCode 桌面版已安装并登录过一次;系统 Node ≥ 18。**
+
+方式 A —— **skill 一键部署**(推荐,zcode 用户):
+
+```bash
+git clone https://github.com/TechYan/zcode_mcp.git
+bash zcode_mcp/skill/scripts/setup.sh          # 构建 + Node24 运行时 + 注册 Codex/Claude Code
+```
+
+装完还能把 `zcode_mcp/skill/` 复制到 `~/.zcode/skills/zcode-mcp/`,以后在 zcode 里说"部署/排障 zcode-mcp"即可触发。
+
+方式 B —— **手动三步**:
+
+```bash
+git clone https://github.com/TechYan/zcode_mcp.git && cd zcode_mcp
+npm install && npm run build
+# 按「接入配置」注册到你的客户端
+```
+
+**验证**:客户端里调用 `zcode_check`,期望:
+
+```
+binary: /Applications/ZCode.app/Contents/Resources/glm/zcode.cjs
+credentials: found (~/.zcode/v2/credentials.json)
+models: GLM-5.3, GLM-5.3-Flash
+status: ok
+```
+
+## ⚙️ 接入配置
+
+**Codex**(`~/.codex/config.toml`,`<repo>` = 仓库绝对路径):
 
 ```toml
 [mcp_servers.zcode]
@@ -46,72 +108,136 @@ command = "node"
 args = ["<repo>/dist/index.js"]
 ```
 
-> 注意:Codex 对 MCP 工具调用有自己的超时。真实开发任务动辄几分钟,建议调大工具超时;`zcode_run` 侧也有自己的 `timeout_ms` 参数(默认 10 分钟)。
+> Codex 自身有工具调用超时,真实任务动辄数分钟,记得调大;`zcode_run` 侧另有 `timeout_ms`。
 
-### Claude Code / zcode 自身
+**Claude Code**:
 
 ```bash
 claude mcp add zcode -- node <repo>/dist/index.js
-# 或在任何支持 mcpServers 的客户端中等价配置
 ```
 
-### 通用 mcpServers 片段
+**通用 mcpServers**:
 
 ```json
-{
-  "mcpServers": {
-    "zcode": {
-      "command": "node",
-      "args": ["<repo>/dist/index.js"]
-    }
-  }
-}
+{ "mcpServers": { "zcode": { "command": "node", "args": ["<repo>/dist/index.js"] } } }
 ```
 
-## 环境变量
+## 🎯 使用示例
+
+外部 agent(Codex/GPT)的典型工作流——先问、再做、再追问:
+
+```
+用户:  帮我在 ~/proj 里加一个重试装饰器,单测要过
+GPT:   zcode_run(mode=plan, cwd=~/proj,
+         prompt="分析项目结构,给出加通用重试装饰器的改造点清单")
+       ← zcode 返回改造点清单(只读,未改文件)
+GPT:   zcode_run(cwd=~/proj,
+         prompt="按清单实现 retry 装饰器 + 单测,跑 pytest 全绿后汇报")
+       ← 返回正文 + 元数据:
+         session_id: sess_d01ae756-...
+         model: GLM-5.3 (account:bigmodel-individual-coding-plan)
+         tools_used: Read(12), Edit(3), Bash(2)
+         tokens: in=68604 out=312   duration: 25s
+GPT:   (审查 diff)zcode_run(session_id=sess_d01ae756..., prompt="单测里补一个超时分支")
+       ← 同一会话续接,8s 完成
+```
+
+**委派心法**:调用方拆解与审查,zcode 执行;一次一个可验证闭环;prompt 自包含(zcode 看不到调用方上下文);`session_id` 传回续接。更多见 `skill/references/usage.md`。
+
+## ⚙️ 配置参考
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `ZCODE_BIN` | `/Applications/ZCode.app/Contents/Resources/glm/zcode.cjs` | zcode CLI 入口(绝对路径,`.cjs`) |
+| `ZCODE_BIN` | App 包内 `glm/zcode.cjs` | zcode CLI 入口(绝对路径,`.cjs`) |
+| `ZCODE_NODE_BIN` | 自动探测 | app-server 子进程的 Node(zcode 0.17+ 需 ≥ v24) |
 | `ZCODE_PROVIDER` | `account:bigmodel-individual-coding-plan` | 首选账号 provider |
 | `ZCODE_MODEL` | `GLM-5.3` | 默认模型 |
 | `ZCODE_REASONING` | `max` | 默认推理档位 |
-| `ZCODE_DEFAULT_CWD` | server 进程 cwd | `zcode_run` 未传 `cwd` 时的兜底目录 |
-| `ZCODE_MCP_AUTO_PROXY` | `1` | 自动检测 macOS 系统代理并透传给 zcode 子进程(`0` 关闭) |
-| `ZCODE_NODE_BIN` | 自动探测 | zcode app-server 子进程使用的 Node 可执行文件(zcode 0.17+ 需 ≥ v24) |
-| `ZCODE_MCP_DEBUG` | – | `1` 时向 stderr 输出调试日志 |
-| `ZCODE_CREDENTIAL_SECRET` | 机器指纹派生 | zcode 凭据加密密钥(与 zcode 客户端一致,一般无需设置) |
+| `ZCODE_DEFAULT_CWD` | server 进程 cwd | `zcode_run` 未传 cwd 时的兜底 |
+| `ZCODE_MCP_AUTO_PROXY` | `1` | 自动检测 macOS 系统代理并透传(`0` 关闭) |
+| `ZCODE_MCP_DEBUG` | – | `1` 时 stderr 输出调试日志 |
+| `ZCODE_CREDENTIAL_SECRET` | 机器指纹派生 | 凭据加密密钥(与 zcode 客户端一致,一般无需设) |
 
-## 工作原理(逆向笔记)
-
-zcode 桌面版并不直接跑 agent,而是 spawn `zcode app-server` 子进程,通过一套内部协议(ZCode Protocol)交互。本工具在 MCP 侧重演了"桌面客户端"的角色:
-
-- **传输**:stdio 上的行分隔 JSON(注意:不是 JSON-RPC,带 `jsonrpc` 键会被严格 zod 校验拒绝)。
-- **provider 物化**:app-server 自身不持有账号 provider。桌面版启动时通过 `provider/updateAccountConfig` 推送 provider 定义(不带密钥),并在每次模型请求时响应 `interaction/requestProviderRuntimeHeaders` 注入凭据。zcode-mcp 读取 `~/.zcode/v2/credentials.json` 中加密的 coding-plan api-key(AES-256-GCM,密钥由机器指纹派生)完成同样的事。
-- **会话**:`session/create`(可带 mode/model)→ `session/subscribe` → `session/send`(带 `modelSelection`,含必填的 `reasoningLevel`)→ 收 `session/event` 通知直到 `turn.completed`/`turn.failed` → `session/messages` 取结构化结果(答复文本、工具调用、token 用量)。
-- **TLS/代理**:Node 内置 CA 库缺 api.z.ai 的 Sectigo 新证书链;首次启动会把 macOS 系统根证书导出到 `~/.zcode-mcp-system-roots.pem` 并以 `NODE_EXTRA_CA_CERTS` 传给子进程。若设置了系统代理,也会自动以 `HTTPS_PROXY` 透传(zcode 原生支持)。
-- **进程隔离**:zcode 入口脚本被软链到 `~/.zcode-mcp/zcode-entry.cjs`,子进程以固定相对路径 fork,不拼接任何动态命令。
-
-## 安全须知
-
-- `zcode_run` 等于把**本机代码执行权**交给调用方 agent(默认 `yolo` 模式,无确认直接执行)。只在你信任的 MCP 客户端里加载。
-- 需要更保守时用 `mode: "plan"`(只读分析)或 `"build"`;app-server 上抛的权限确认(`interaction/*`)会被自动拒绝,任务即失败返回,不会挂起。
-- 凭据只在本地解密并直传给本机的 zcode 子进程,不落盘、不出网。
-
-## 开发
+场景化组合(抄走即用):
 
 ```bash
-npm run build        # 编译到 dist/
-node scripts/probe.mjs "..."       # 直接驱动 app-server 协议(逆向用)
-node scripts/probe-fork.mjs        # fork 模式事件流对照实验
-node scripts/e2e.mjs               # 端到端:起 MCP server,跑 zcode_check/zcode_run/追问/会话列表
+# 省额度:机械改动走 Flash
+ZCODE_MODEL=GLM-5.3-Flash ZCODE_REASONING=high
+
+# 公司代理环境(通常无需手动,自动检测;不生效时显式指定)
+HTTPS_PROXY=http://127.0.0.1:7897
+
+# 自定义 Node 运行时(如 volta/nvm 安装的 24)
+ZCODE_NODE_BIN=$HOME/.volta/bin/node
 ```
 
-### 已知限制
+## 🏗️ 工作原理
 
-- ZCode Protocol 是内部接口,随 zcode 版本(已验证 0.16.9 与 0.17.1)可能变动;协议层全部隔离在 `src/protocol.ts`,变动时只需改这一个文件。0.17 的破坏性变化在运行时层:app-server 需要 Node ≥ 24(见前置条件),协议本身未变。
-- 权限确认交互被自动拒绝,因此 `build`/`edit` 模式下需要确认的操作会失败——无头委派场景建议 `yolo`。
-- 每个工作区首次 `session/create` 后模型列表会缓存;切换 zcode 登录账号需重启 MCP server。
+zcode 桌面版本身也是 spawn `zcode app-server` 子进程、经一套内部协议驱动 agent;zcode-mcp 在 MCP 侧重演"桌面客户端"角色:
+
+<details>
+<summary>协议细节(逆向笔记,改动只涉及 <code>src/protocol.ts</code>)</summary>
+
+- **传输**:stdio 行分隔 JSON。注意**不是 JSON-RPC**——带 `jsonrpc` 键会被严格 zod 校验拒绝;事件类型在 `params.type` 顶层
+- **provider 物化**:app-server 不持有账号 provider;由客户端经 `provider/updateAccountConfig` 推送定义(无密钥),并在每次模型请求时响应 `interaction/requestProviderRuntimeHeaders` 注入凭据(运行时解密本地加密 api-key)
+- **会话**:`session/create`(mode/model)→ `session/subscribe` → `session/send`(modelSelection 含必填 reasoningLevel)→ `session/event` 至 `turn.completed/failed` → `session/messages` 取结构化结果
+- **TLS/代理**:Node 内置 CA 缺 api.z.ai 的 Sectigo 新链 → 自动导出 macOS 系统根证书到 `~/.zcode-mcp-system-roots.pem` 经 `NODE_EXTRA_CA_CERTS` 注入;系统代理经 `HTTPS_PROXY` 透传(zcode 原生支持)
+- **运行时**:zcode 0.17+ 的 SQLite 迁移依赖 `node:sqlite isTransaction`(Node ≥ 24)→ 自动选用 `~/.zcode-mcp/runtime/` 便携 Node(官方 tarball 解压即得)/ `ZCODE_NODE_BIN` / 系统 Node≥24,`fork` 的 `execPath` 指定
+- **进程隔离**:zcode 入口软链到 `~/.zcode-mcp/zcode-entry.cjs`,子进程以固定字面量参数 fork,无动态命令拼接
+
+</details>
+
+## 🔧 排障
+
+第一步永远是 `zcode_check`;`ZCODE_MCP_DEBUG=1` 可开日志。按症状对号:
+
+| 症状 | 根因 | 处置 |
+|---|---|---|
+| `zcode 0.17+ requires Node >= 24` / `sql_failed` | Node < 24 缺 `isTransaction` | 跑 `setup.sh` 装便携 Node 24,或设 `ZCODE_NODE_BIN` |
+| `no models available` | 桌面版从未登录 | 打开 ZCode 桌面版登录一次 |
+| `provider_not_found` | provider 推送未生效 | 重启 server;仍失败设 `ZCODE_PROVIDER` |
+| `MODEL_TLS_VALIDATION_FAILED` | Node CA 缺新链 | 确认 `~/.zcode-mcp-system-roots.pem` 存在非空 |
+| 连接超时 | Node 不走系统代理 | 自动透传已开启;手动设 `HTTPS_PROXY` |
+| `turn timed out` | 任务超时 | 调大 `timeout_ms` 与客户端超时 |
+| `A prompt is already running` | 同会话并发 | 每会话串行;或开新会话 |
+| `interaction denied` 失败 | 非 yolo 模式权限被自动拒绝 | 无头委派用 `mode: yolo` |
+
+完整版见 `skill/references/troubleshooting.md`。
+
+## 📊 同类项目对比
+
+| 项目 | 做法 | 与本项目差异 |
+|---|---|---|
+| `claude mcp serve`(官方) | Claude Code 内置 MCP 服务端 | zcode 无对应能力,本项目补位 |
+| [steipete/claude-code-mcp](https://github.com/steipete/claude-code-mcp) | 包装 `claude -p` CLI | zcode `-p` 无法选模型不可用,故走 app-server 协议(多轮/事件流/取消更强) |
+| [claude-codex-bridge](https://lobehub.com) 等 | 双向桥接其他 CLI | 同形态;本项目面向 zcode + GLM,并解决凭据/TLS/代理本地化 |
+
+## ❓ FAQ
+
+**Q: 默认 yolo 安全吗?** 等于把本机代码执行权交给调用方 agent。只注册给信任的客户端;更保守用 `plan`(只读)起步。
+
+**Q: 能省多少 token?** 编码细节(读文件、跑测试的 IO)全部消耗在 zcode 侧;调用方只花规划与审查。参考:一次典型任务 zcode 侧 in≈70k tokens,调用方仅见数百 token 的答复。
+
+**Q: 桌面版更新会坏吗?** 协议在 0.16.9→0.17.1 间未变;若有变动,全部隔离在 `src/protocol.ts`。0.17 的破坏点是 Node ≥ 24(已自动处理)。
+
+**Q: Windows/Linux?** 当前面向 macOS(ZCode 桌面版路径、系统证书导出、代理探测均为 macOS 实现);协议层本身跨平台。
+
+## 🔒 安全须知
+
+- `zcode_run` 默认 `yolo` 全自动执行——只给信任的 MCP 客户端
+- app-server 上抛的权限/用户输入交互(`interaction/*`)被自动**拒绝**(无头无法应答),不会挂起
+- 凭据只在本地解密、直传本机 zcode 子进程,不落盘、不出网
+
+## 🧪 开发
+
+```bash
+npm run build                      # 编译到 dist/
+npm test                           # 冒烟测试(真实起 server + zcode_check)
+node scripts/e2e.mjs               # 端到端:zcode_run 真实任务 + 追问 + 会话列表
+node scripts/probe.mjs "..."       # 直接驱动 app-server 协议(逆向用)
+```
+
+已知限制:ZCode Protocol 为内部接口(已验证 0.16.9 / 0.17.1);`build`/`edit` 模式下需确认的操作会被拒绝失败——无头委派建议 `yolo`;切换 zcode 登录账号需重启 server。
 
 ## License
 
