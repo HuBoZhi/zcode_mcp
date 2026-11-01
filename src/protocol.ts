@@ -42,7 +42,7 @@ const ACCOUNT_PROVIDERS = [
   "account:bigmodel-offpeak-idle-plan",
 ] as const;
 
-export type PermissionMode = "plan" | "build" | "edit" | "yolo" | "auto";
+export type PermissionMode = "plan" | "build" | "edit" | "yolo" | "guarded" | "auto";
 
 export interface ModelRef {
   providerId: string;
@@ -112,6 +112,45 @@ export class ZcodeProtocolClient extends EventEmitter {
   }
 
   /**
+   * Pick the Node runtime for the app-server child. zcode >= 0.17 needs a Node whose
+   * node:sqlite exposes `isTransaction` (Node >= 24); older system nodes crash the
+   * CLI's SQLite migrations with a generic "sql_failed". Preference: ZCODE_NODE_BIN >
+   * bundled runtime under ~/.zcode-mcp/runtime (version read from the directory name,
+   * no child process spawned here) > system node (only if >= 24).
+   */
+  private resolveNodeRuntime(): string {
+    const checked = (bin: string): string | null =>
+      existsSync(bin) && statSync(bin).isFile() ? bin : null;
+
+    if (process.env.ZCODE_NODE_BIN) {
+      const bin = checked(process.env.ZCODE_NODE_BIN);
+      if (bin) return bin;
+      this.logger(`ZCODE_NODE_BIN points nowhere usable: ${process.env.ZCODE_NODE_BIN}`);
+    }
+    try {
+      const runtimeDir = join(homedir(), ".zcode-mcp", "runtime");
+      if (existsSync(runtimeDir)) {
+        for (const name of readdirSync(runtimeDir).sort().reverse()) {
+          // Official tarballs extract as node-v24.21.0-darwin-arm64 (note the "v").
+          const m = name.match(/^node-v(\d+)\./);
+          if (m && Number(m[1]) >= 24) {
+            const bin = checked(join(runtimeDir, name, "bin", "node"));
+            if (bin) return bin;
+          }
+        }
+      }
+    } catch { /* best effort */ }
+
+    const systemMajor = Number(process.versions.node.split(".")[0]);
+    if (Number.isFinite(systemMajor) && systemMajor >= 24) return process.execPath;
+
+    throw new ZcodeProtocolError(
+      "zcode 0.17+ requires Node >= 24 for its SQLite migrations (node:sqlite isTransaction). " +
+        "Install Node 24+, or set ZCODE_NODE_BIN, or unpack a portable Node 24 into ~/.zcode-mcp/runtime/ (see README).",
+    );
+  }
+
+  /**
    * Validate the configured zcode entry script and expose it as a symlink at
    * <dir>/zcode-entry.cjs so the child is always forked from a fixed relative
    * filename (no dynamic command path anywhere). Returns the directory.
@@ -155,9 +194,12 @@ export class ZcodeProtocolClient extends EventEmitter {
   async start(): Promise<void> {
     if (this.booted) return;
     const entryDir = this.prepareEntryLink();
+    const nodeBin = this.resolveNodeRuntime();
     const env = this.buildChildEnv();
     this.child = fork("zcode-entry.cjs", ["app-server"], {
       cwd: entryDir,
+      // zcode 0.17+ needs Node >= 24 (node:sqlite isTransaction); execPath selects it.
+      execPath: nodeBin,
       // "ipc" is required by fork(); the protocol itself runs over the stdin/stdout pipes.
       stdio: ["pipe", "pipe", "pipe", "ipc"],
       env,

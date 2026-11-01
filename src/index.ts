@@ -160,7 +160,7 @@ function truncate(s: string): string {
 }
 
 const server = new McpServer(
-  { name: "zcode-mcp", version: "0.1.0" },
+  { name: "zcode-mcp", version: "0.2.0" },
   {
     instructions:
       "Delegate coding tasks to the zcode agent. The calling model should plan and break down work, then hand each concrete task to zcode_run with the project directory as cwd. Pass back the returned session_id to continue a conversation.",
@@ -180,9 +180,9 @@ server.registerTool(
         .optional()
         .describe("Absolute path of the project directory zcode should work in (required for any file work)."),
       mode: z
-        .enum(["plan", "build", "edit", "yolo", "auto"])
+        .enum(["plan", "build", "edit", "yolo", "guarded", "auto"])
         .optional()
-        .describe("Permission mode. yolo = no confirmations (default, suitable for headless delegation); plan = read-only analysis."),
+        .describe("Permission mode. yolo = no confirmations (default, suitable for headless delegation); guarded = policy-gated; plan = read-only analysis."),
       model: z.string().optional().describe("Model id, e.g. GLM-5.3 (default) or GLM-5.3-Flash."),
       reasoning_level: z.string().optional().describe("Reasoning effort: low | high | max (default max)."),
       session_id: z.string().optional().describe("Continue a previous zcode conversation (from an earlier zcode_run result)."),

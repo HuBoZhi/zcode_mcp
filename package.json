@@ -1,6 +1,6 @@
 {
   "name": "zcode-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Expose the zcode coding agent as MCP tools, so external agents (Codex, Claude Code, ...) can delegate development tasks to zcode.",
   "type": "module",
   "bin": {
