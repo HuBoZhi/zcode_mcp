@@ -25,7 +25,7 @@ import {
   realpathSync,
 } from "node:fs";
 import { arch, homedir, platform, userInfo } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, isAbsolute } from "node:path";
 import { createHash, createDecipheriv } from "node:crypto";
 import { EventEmitter } from "node:events";
 
@@ -155,38 +155,13 @@ export class ZcodeProtocolClient extends EventEmitter {
    * <dir>/zcode-entry.cjs so the child is always forked from a fixed relative
    * filename (no dynamic command path anywhere). Returns the directory.
    */
+  // RELAY_WINDOWS_STORAGE_PATCH: no symlinks, no task writes to the user's C-drive home.
   private prepareEntryLink(): string {
-    const p = realpathSync(this.binPath);
-    if (!p.startsWith("/") || !p.endsWith(".cjs")) {
-      throw new ZcodeProtocolError(
-        `invalid ZCODE_BIN (want an absolute path to the zcode .cjs entry script): ${this.binPath}`,
-      );
-    }
-    if (!existsSync(p) || !statSync(p).isFile()) {
-      throw new ZcodeProtocolError(`zcode CLI not found at ${this.binPath}. Set ZCODE_BIN to the zcode.cjs path.`);
-    }
-    const dir = join(homedir(), ".zcode-mcp");
-    mkdirSync(dir, { recursive: true });
-    try {
-      rmSync(join(dir, "zcode-entry.cjs"), { force: true });
-      symlinkSync(p, join(dir, "zcode-entry.cjs"));
-
-      // Newer app bundles locate their bundled provider config next to argv[1].
-      // Mirror that layout beside the stable entrypoint symlink so zcode can
-      // materialize and refresh its active provider config normally.
-      const bundledProvider = [
-        join(dirname(p), "provider/zcode-builtin.json"),
-        join(dirname(dirname(p)), "config/provider/zcode-builtin.json"),
-      ].find((candidate) => existsSync(candidate));
-      if (bundledProvider) {
-        const providerDir = join(dir, "provider");
-        mkdirSync(providerDir, { recursive: true });
-        rmSync(join(providerDir, "zcode-builtin.json"), { force: true });
-        symlinkSync(bundledProvider, join(providerDir, "zcode-builtin.json"));
-      }
-    } catch {
-      // A stale link will fail loudly at fork time.
-    }
+    const binary = realpathSync(this.binPath);
+    if (!isAbsolute(binary) || !binary.endsWith('.cjs')) throw new Error('Invalid ZCODE_BIN');
+    const dir = process.env.ZCODE_MCP_STATE_DIR;
+    if (!dir || !isAbsolute(dir) || /^C:/i.test(dir)) throw new Error('Set ZCODE_MCP_STATE_DIR to a non-C absolute path');
+    mkdirSync(dir, {recursive:true});
     return dir;
   }
 
@@ -196,12 +171,12 @@ export class ZcodeProtocolClient extends EventEmitter {
     const entryDir = this.prepareEntryLink();
     const nodeBin = this.resolveNodeRuntime();
     const env = this.buildChildEnv();
-    this.child = fork("zcode-entry.cjs", ["app-server"], {
+    this.child = fork(realpathSync(this.binPath), ["app-server"], {
       cwd: entryDir,
       // zcode 0.17+ needs Node >= 24 (node:sqlite isTransaction); execPath selects it.
       execPath: nodeBin,
       // "ipc" is required by fork(); the protocol itself runs over the stdin/stdout pipes.
-      stdio: ["pipe", "pipe", "pipe", "ipc"],
+      stdio: ["pipe", "pipe", "pipe", "ipc"], windowsHide: true,
       env,
     });
     this.child.stdout!.setEncoding("utf8");
@@ -473,7 +448,7 @@ export class ZcodeProtocolClient extends EventEmitter {
       } catch { /* best effort */ }
     }
     // zcode honors HTTPS_PROXY; node ignores the macOS system proxy, so forward it when set.
-    if (!env.HTTPS_PROXY && env.ZCODE_MCP_AUTO_PROXY !== "0") {
+    if (platform() === "darwin" && !env.HTTPS_PROXY && env.ZCODE_MCP_AUTO_PROXY !== "0") {
       try {
         const out = execFileSync("scutil", ["--proxy"], { encoding: "utf8" });
         const host = out.match(/HTTPSProxy : (\S+)/)?.[1];
@@ -512,6 +487,24 @@ export class ZcodeProtocolClient extends EventEmitter {
 
   /** The builtin revision marker the desktop uses; falls back to a static value. */
   private readBuiltinRevision(): string {
+    // RELAY_WORKER_REVISION: the isolated worker can have a different provider hash than the desktop.
+    try {
+      const dir = process.env.ZCODE_LOG_DIR;
+      if (dir) {
+        for (const file of readdirSync(dir).filter(f => /\.(log|jsonl)$/.test(f)).sort().reverse()) {
+          const lines = readFileSync(join(dir,file),'utf8').split('\n').reverse();
+          for (const line of lines) {
+            try {
+              const item = JSON.parse(line);
+              if (item.event !== 'zcode_protocol.provider_registry.ready') continue;
+              const marker = String(item.context?.accountRevision).match(/zcode-builtin:\d+:[a-f0-9]{64}/);
+              if (marker) return marker[0];
+            } catch {}
+          }
+        }
+      }
+    } catch {}
+
     try {
       const logDir = join(homedir(), ".zcode/v2/logs");
       const files = readdirSync(logDir).filter((f) => f.endsWith(".log")).sort();

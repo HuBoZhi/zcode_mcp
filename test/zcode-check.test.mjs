@@ -4,7 +4,7 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-test("zcode_check boots the bundled app-server and exposes models", { timeout: 70_000 }, async () => {
+test("zcode_check boots the bundled app-server and exposes models", { skip: process.env.ZCODE_MCP_LIVE_TESTS !== "1", timeout: 70_000 }, async () => {
   const transport = new StdioClientTransport({
     command: process.execPath,
     args: ["dist/index.js"],

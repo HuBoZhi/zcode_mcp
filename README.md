@@ -70,6 +70,15 @@ zcode 没有官方 `mcp serve`,CLI `-p` 无头模式又无法指定模型;本项
 
 ## 🚀 快速开始
 
+### Windows 与自定义运行目录
+
+Windows 可通过 `ZCODE_BIN` 指定已安装 ZCode 的 `.cjs` 入口，通过
+`ZCODE_NODE_BIN` 指定 Node 24+。设置 `ZCODE_MCP_STATE_DIR` 为非 C 盘绝对路径；
+子进程直接运行原始入口，不需要创建符号链接。`TEMP`、`TMP`、`TMPDIR`、
+`ZCODE_LOG_DIR` 及 ZCode 的存储环境变量也应指向自行配置的非 C 盘目录。
+
+默认测试不启动真实 app-server。显式设置 `ZCODE_MCP_LIVE_TESTS=1` 才运行模型可用性检查。
+
 **前置:ZCode 桌面版已安装并登录过一次;系统 Node ≥ 18。**
 
 方式 A —— **skill 一键部署**(推荐,zcode 用户):

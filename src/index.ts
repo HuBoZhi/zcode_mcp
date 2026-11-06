@@ -207,7 +207,7 @@ server.registerTool(
         const resumeId = assertSessionId(args.session_id);
         log(`resuming session ${resumeId} in ${cwd}`);
         ({ sessionId } = await c.resumeSession(resumeId, cwd));
-        models = cachedModels.get(cwd) ?? [];
+        models = cachedModels.get(cwd) ?? (await c.createSession(cwd, "plan")).models;
       } else {
         log(`creating session in ${cwd}`);
         const created = await c.createSession(cwd, (args.mode as PermissionMode) ?? "yolo");
@@ -349,6 +349,7 @@ server.registerTool(
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  transport.onclose = () => { void client?.stop().finally(() => process.exit(0)); if (!client) process.exit(0); };
   log("zcode-mcp ready (stdio)");
   process.on("SIGTERM", async () => {
     await client?.stop();
