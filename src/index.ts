@@ -12,6 +12,7 @@ import { existsSync, statSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 import { z } from "zod";
+import { listDesktopProjects } from "./projects.js";
 import {
   ZcodeProtocolClient,
   ZcodeProtocolError,
@@ -342,6 +343,25 @@ server.registerTool(
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return { isError: true, content: [{ type: "text" as const, text: `zcode_sessions error: ${msg}` }] };
+    }
+  },
+);
+
+server.registerTool(
+  "zcode_projects",
+  {
+    title: "List saved ZCode projects",
+    description: "Read saved local projects from the ZCode desktop project index. Returns project ids, names, primary paths and all roots. No agent session or model request is started. Deleted and remote projects are excluded.",
+    inputSchema: {},
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+  },
+  async () => {
+    try {
+      const result = await listDesktopProjects();
+      return { structuredContent: result, content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    } catch (error) {
+      return { isError: true, content: [{ type: "text" as const,
+        text: `zcode_projects error: ${error instanceof Error ? error.message : String(error)}` }] };
     }
   },
 );

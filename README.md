@@ -55,6 +55,26 @@ zcode 没有官方 `mcp serve`,CLI `-p` 无头模式又无法指定模型;本项
 | `zcode_run` | `(prompt!, cwd, mode, model, reasoning_level, session_id, timeout_ms)` | 委派任务;返回最终答复 + `session_id` + 工具使用/token/耗时统计 |
 | `zcode_check` | `()` | 健康检查:二进制路径、凭据、可用模型;排障第一步 |
 | `zcode_sessions` | `(cwd?)` | 列出可续接的历史会话 |
+| `zcode_projects` | `()` | 读取桌面端保存的本地项目：ID、名称、主目录和全部根目录；不创建会话、不调用模型 |
+
+### 读取桌面项目列表
+
+`zcode_projects` 从桌面端 `~/.zcode/v2/tasks-index.sqlite` 的 `projects` 与
+`project_roots` 表读取项目，排除已删除、远程和无根目录的项目。不使用历史会话或
+最近访问目录推测项目列表，保留桌面记录的原始项目 ID 与路径。
+
+项目工具需要 Node 22.13+，推荐 Node 24+。返回 `structuredContent.projects`，同时
+提供相同 JSON 的文本内容，每项含 `id`、`name`、`path`、`hostId`、`roots`。
+`path` 为主根目录，未标主根时使用排序后的第一个根。
+
+可设置 `ZCODE_PROJECTS_DB` 指定桌面端数据库。它独立于隔离执行器的
+`ZCODE_STORAGE_DIR`，否则只能读到执行器的数据，无法反映桌面项目。
+
+读取时仅复制数据库与 WAL 到独立快照目录，检查复制期间文件是否变动，最多尝试三次。
+SQLite 只打开快照，不打开或写入源库，也不读取凭据。快照用完立即清理。
+目录优先使用已存在的 `ZCODE_MCP_STATE_DIR`，否则使用系统临时目录；Windows 下必须配置到
+非 C 盘，且会检查实际路径，避免目录联接落回 C 盘。数据库不存在或版本表结构不兼容
+时返回明确错误，不会伪装成空项目列表。
 
 `zcode_run` 参数速查:
 
