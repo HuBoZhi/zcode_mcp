@@ -23,6 +23,15 @@ test('permission setting validates backend confirmation and refuses active turns
     ? { events: [{ sessionId: 'sess_test', seq: 1, payload: { planEnabled: true } }] }
     : { settings: { mode: { current: 'yolo' } } };
   assert.equal(await c.setSessionMode('sess_test', 'plan'), 'plan');
+  let planRequests = 0;
+  c.request = async (method, params) => {
+    if (method === 'session/setMode' && params.mode === 'plan') planRequests++;
+    return method === 'session/events'
+      ? { events: planRequests > 1 ? [{ sessionId: 'sess_test', seq: 1, payload: { planEnabled: true } }] : [] }
+      : { settings: { mode: { current: 'build' } } };
+  };
+  assert.equal(await c.setSessionMode('sess_test', 'plan'), 'plan');
+  assert.equal(planRequests, 2);
   c.turnWaiters.set('sess_test', () => {});
   await assert.rejects(c.setSessionMode('sess_test', 'yolo'), /running/);
 });

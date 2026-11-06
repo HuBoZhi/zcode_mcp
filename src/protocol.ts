@@ -256,10 +256,18 @@ export class ZcodeProtocolClient extends EventEmitter {
     // Recent ZCode versions keep the execution mode underneath a plan overlay.
     // Their snapshot still says build/yolo; the journal records planEnabled.
     if (mode === "plan" && current !== "plan") {
-      const result = await this.request("session/events", { sessionId });
-      const event = result?.events?.filter((entry: any) =>
+      const latestPlanEvent = (result: any) => result?.events?.filter((entry: any) =>
         entry.sessionId === sessionId && typeof entry.payload?.planEnabled === "boolean")
         .sort((a: any, b: any) => a.seq - b.seq).at(-1);
+      let event = latestPlanEvent(await this.request("session/events", { sessionId }));
+      if (!event && ["build", "edit", "guarded", "yolo", "auto"].includes(current)) {
+        // A session created in plan has no transition event. Reapply its same
+        // underlying policy, then enter plan to obtain an explicit journal proof.
+        // No prompt is submitted between these idle-state transitions.
+        await this.request("session/setMode", { sessionId, mode: current });
+        await this.request("session/setMode", { sessionId, mode: "plan" });
+        event = latestPlanEvent(await this.request("session/events", { sessionId }));
+      }
       if (event?.payload.planEnabled === true) return "plan";
     }
     if (current !== mode) throw new ZcodeProtocolError(`Permission mode was not confirmed: requested ${mode}, received ${String(current)}`);
