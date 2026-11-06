@@ -204,15 +204,18 @@ server.registerTool(
 
       let sessionId: string;
       let models: AvailableModel[];
+      let effectiveMode: PermissionMode | undefined;
       if (args.session_id) {
         const resumeId = assertSessionId(args.session_id);
         log(`resuming session ${resumeId} in ${cwd}`);
         ({ sessionId } = await c.resumeSession(resumeId, cwd));
+        if (args.mode) effectiveMode = await c.setSessionMode(sessionId, args.mode);
         models = cachedModels.get(cwd) ?? (await c.createSession(cwd, "plan")).models;
       } else {
         log(`creating session in ${cwd}`);
         const created = await c.createSession(cwd, (args.mode as PermissionMode) ?? "yolo");
         sessionId = created.sessionId;
+        effectiveMode = await c.setSessionMode(sessionId, (args.mode as PermissionMode) ?? "yolo");
         models = created.models;
         cachedModels.set(cwd, models);
       }
@@ -241,6 +244,7 @@ server.registerTool(
 
       const meta = [
         `session_id: ${sessionId}`,
+        effectiveMode ? `permission_mode: ${effectiveMode}` : null,
         summary.modelId ? `model: ${summary.modelId} (${summary.providerId})` : null,
         toolLine ? `tools_used: ${toolLine}` : null,
         summary.tokens ? `tokens: in=${summary.tokens.input ?? "?"} out=${summary.tokens.output ?? "?"}` : null,
@@ -343,6 +347,32 @@ server.registerTool(
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return { isError: true, content: [{ type: "text" as const, text: `zcode_sessions error: ${msg}` }] };
+    }
+  },
+);
+
+server.registerTool(
+  "zcode_set_mode",
+  {
+    title: "Set ZCode session permissions",
+    description: "Change an existing idle session's permission mode without sending a prompt. plan=plan, build=confirm changes, edit=auto edit, guarded=autonomous with risky operations confirmed, yolo=full access. Headless confirmation requests are denied, never automatically approved.",
+    inputSchema: {
+      session_id: z.string().describe("Existing sess_... session id"),
+      cwd: z.string().optional().describe("Session workspace directory"),
+      mode: z.enum(["plan", "build", "edit", "guarded", "yolo", "auto"]),
+    },
+  },
+  async (args) => {
+    try {
+      const sessionId = assertSessionId(args.session_id);
+      const cwd = resolveCwd(args.cwd);
+      const c = await getClient();
+      await c.resumeSession(sessionId, cwd);
+      const mode = await c.setSessionMode(sessionId, args.mode);
+      const result = { session_id: sessionId, mode };
+      return { structuredContent: result, content: [{ type: "text" as const, text: JSON.stringify(result) }] };
+    } catch (error) {
+      return { isError: true, content: [{ type: "text" as const, text: `zcode_set_mode error: ${error instanceof Error ? error.message : String(error)}` }] };
     }
   },
 );

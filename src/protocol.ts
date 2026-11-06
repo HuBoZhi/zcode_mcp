@@ -245,6 +245,18 @@ export class ZcodeProtocolClient extends EventEmitter {
     return { sessionId };
   }
 
+  /** Apply an explicit permission choice before sending another turn. */
+  async setSessionMode(sessionId: string, mode: PermissionMode): Promise<PermissionMode> {
+    if (!["plan", "build", "edit", "guarded", "yolo", "auto"].includes(mode)) {
+      throw new ZcodeProtocolError("Invalid permission mode");
+    }
+    if (this.turnWaiters.has(sessionId)) throw new ZcodeProtocolError("Cannot change permissions while a turn is running");
+    const response = await this.request("session/setMode", { sessionId, mode });
+    const current = (response?.value ?? response)?.settings?.mode?.current;
+    if (current !== mode) throw new ZcodeProtocolError(`Permission mode was not confirmed: requested ${mode}, received ${String(current)}`);
+    return current;
+  }
+
   /** Run one turn: send a prompt and resolve when the turn completes or fails. */
   async runTurn(
     sessionId: string,
