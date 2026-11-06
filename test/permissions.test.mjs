@@ -19,6 +19,10 @@ test('permission setting validates backend confirmation and refuses active turns
   await assert.rejects(c.setSessionMode('sess_test', 'invalid'), /Invalid/);
   c.request = async () => ({ settings: { mode: { current: 'yolo' } } });
   await assert.rejects(c.setSessionMode('sess_test', 'plan'), /not confirmed/);
+  c.request = async method => method === 'session/events'
+    ? { events: [{ sessionId: 'sess_test', seq: 1, payload: { planEnabled: true } }] }
+    : { settings: { mode: { current: 'yolo' } } };
+  assert.equal(await c.setSessionMode('sess_test', 'plan'), 'plan');
   c.turnWaiters.set('sess_test', () => {});
   await assert.rejects(c.setSessionMode('sess_test', 'yolo'), /running/);
 });

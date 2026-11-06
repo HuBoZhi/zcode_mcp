@@ -253,6 +253,15 @@ export class ZcodeProtocolClient extends EventEmitter {
     if (this.turnWaiters.has(sessionId)) throw new ZcodeProtocolError("Cannot change permissions while a turn is running");
     const response = await this.request("session/setMode", { sessionId, mode });
     const current = (response?.value ?? response)?.settings?.mode?.current;
+    // Recent ZCode versions keep the execution mode underneath a plan overlay.
+    // Their snapshot still says build/yolo; the journal records planEnabled.
+    if (mode === "plan" && current !== "plan") {
+      const result = await this.request("session/events", { sessionId });
+      const event = result?.events?.filter((entry: any) =>
+        entry.sessionId === sessionId && typeof entry.payload?.planEnabled === "boolean")
+        .sort((a: any, b: any) => a.seq - b.seq).at(-1);
+      if (event?.payload.planEnabled === true) return "plan";
+    }
     if (current !== mode) throw new ZcodeProtocolError(`Permission mode was not confirmed: requested ${mode}, received ${String(current)}`);
     return current;
   }
